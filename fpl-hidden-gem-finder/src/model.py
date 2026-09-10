@@ -1,92 +1,137 @@
-"""
-Modeling functions for the FPL Hidden Gem Finder project.
-"""
+"""Simple, interpretable models for next-gameweek FPL points."""
+
+from typing import Sequence
 
 import pandas as pd
 from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, r2_score
 
 
-def time_based_split(df: pd.DataFrame, train_gw_end: int, test_gw_start: int):
-    """
-    Split the DataFrame into train/test sets chronologically by gameweek.
+def time_based_split(
+    df: pd.DataFrame,
+    train_gw_end: int,
+    test_gw_start: int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split rows chronologically by gameweek without shuffling.
 
-    IMPORTANT: Do NOT use sklearn's train_test_split(shuffle=True) here.
-    This is time-series-like data — randomly shuffling gameweeks means the
-    model could train on a later gameweek and test on an earlier one,
-    which leaks future information into training. Always split so that
-    training gameweeks come strictly before test gameweeks.
+    Randomly shuffling this data can put later gameweeks in the training set
+    and earlier gameweeks in the test set. That leaks future information into
+    training and makes evaluation unrealistically optimistic.
 
     Parameters
     ----------
     df : pd.DataFrame
-        Must contain a gameweek column (e.g. 'round' or 'gameweek').
+        Must contain a ``gameweek`` column.
     train_gw_end : int
-        Last gameweek (inclusive) to include in the training set.
+        Last gameweek included in training.
     test_gw_start : int
-        First gameweek (inclusive) to include in the test set.
+        First gameweek included in testing.
 
     Returns
     -------
     tuple[pd.DataFrame, pd.DataFrame]
-        (train_df, test_df)
+        Chronological ``(train_df, test_df)``.
     """
-    raise NotImplementedError
+    if "gameweek" not in df.columns:
+        raise ValueError("DataFrame must contain a 'gameweek' column.")
+    if train_gw_end >= test_gw_start:
+        raise ValueError("train_gw_end must be before test_gw_start.")
+
+    gameweeks = pd.to_numeric(df["gameweek"], errors="coerce")
+    if gameweeks.isna().any():
+        raise ValueError("gameweek must contain numeric values.")
+
+    train_df = df.loc[gameweeks <= train_gw_end].copy()
+    test_df = df.loc[gameweeks >= test_gw_start].copy()
+    return train_df, test_df
 
 
-def train_baseline_model(train_df: pd.DataFrame):
+def train_baseline_model(train_df: pd.DataFrame) -> pd.Series:
+    """Predict each player's points with their historical training average.
+
+    The returned Series is indexed by ``player_id`` and must be created from
+    training rows only. It provides the benchmark that the regression model
+    needs to beat.
     """
-    Build a naive baseline: predict each player's next-gameweek points as
-    their historical average points so far. This is what your real model
-    needs to beat to prove it's adding value.
+    required_columns = {"player_id", "total_points"}
+    missing_columns = required_columns.difference(train_df.columns)
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {sorted(missing_columns)}")
 
-    Parameters
-    ----------
-    train_df : pd.DataFrame
+    baseline = train_df.groupby("player_id")["total_points"].mean()
+    baseline.name = "baseline_prediction"
+    return baseline
 
-    Returns
-    -------
-    dict or pd.Series
-        Mapping of player id -> baseline predicted points.
+
+def train_linear_regression(
+    train_df: pd.DataFrame,
+    features: Sequence[str],
+    target: str,
+) -> LinearRegression:
+    """Fit an ordinary least-squares linear regression model.
+
+    Rows with missing feature or target values are excluded because the rolling
+    features are undefined for a player's first gameweek.
     """
-    raise NotImplementedError
+    columns = list(features) + [target]
+    missing_columns = set(columns).difference(train_df.columns)
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {sorted(missing_columns)}")
+
+    training_data = train_df[columns].dropna()
+    if training_data.empty:
+        raise ValueError("No complete rows are available for model training.")
+
+    model = LinearRegression()
+    model.fit(training_data[list(features)], training_data[target])
+    return model
 
 
-def train_linear_regression(train_df: pd.DataFrame, features: list, target: str) -> LinearRegression:
+def evaluate_model(
+    model: LinearRegression,
+    test_df: pd.DataFrame,
+    features: Sequence[str],
+    target: str,
+    baseline_predictions: pd.Series,
+) -> dict[str, float]:
+    """Compare regression and historical-average baseline predictions.
+
+    ``baseline_predictions`` should come from ``train_baseline_model`` and be
+    indexed by ``player_id``. Positive ``mae_improvement`` means the regression
+    has lower error; positive ``r2_improvement`` means it explains more
+    variance than the baseline.
     """
-    Train a scikit-learn LinearRegression model on the given features.
+    columns = list(features) + [target, "player_id"]
+    missing_columns = set(columns).difference(test_df.columns)
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {sorted(missing_columns)}")
 
-    Parameters
-    ----------
-    train_df : pd.DataFrame
-    features : list of str
-        Column names to use as model inputs.
-    target : str
-        Column name of the value to predict (e.g. next gameweek's points).
+    evaluation_data = test_df[columns].dropna().copy()
+    if evaluation_data.empty:
+        raise ValueError("No complete rows are available for evaluation.")
 
-    Returns
-    -------
-    LinearRegression
-        The fitted model.
-    """
-    raise NotImplementedError
+    model_predictions = model.predict(evaluation_data[list(features)])
+    baseline = evaluation_data["player_id"].map(baseline_predictions)
+    valid_baseline = baseline.notna()
+    if not valid_baseline.any():
+        raise ValueError("No test players have a baseline prediction.")
 
+    actual = evaluation_data.loc[valid_baseline, target]
+    baseline_values = baseline.loc[valid_baseline]
+    model_values = pd.Series(model_predictions, index=evaluation_data.index).loc[
+        valid_baseline
+    ]
 
-def evaluate_model(model, test_df: pd.DataFrame, features: list, target: str) -> dict:
-    """
-    Evaluate a fitted model on the test set.
+    model_r2 = r2_score(actual, model_predictions)
+    model_mae = mean_absolute_error(actual, model_predictions)
+    baseline_r2 = r2_score(actual, baseline_values)
+    baseline_mae = mean_absolute_error(actual, baseline_values)
 
-    Parameters
-    ----------
-    model : fitted sklearn estimator
-    test_df : pd.DataFrame
-    features : list of str
-    target : str
-
-    Returns
-    -------
-    dict
-        e.g. {"r2": ..., "mae": ...}
-        Also consider comparing against the baseline's R²/MAE to show
-        whether the model actually adds value.
-    """
-    raise NotImplementedError
+    return {
+        "model_r2": model_r2,
+        "model_mae": model_mae,
+        "baseline_r2": baseline_r2,
+        "baseline_mae": baseline_mae,
+        "r2_improvement": model_r2 - baseline_r2,
+        "mae_improvement": baseline_mae - mean_absolute_error(actual, model_values),
+    }
