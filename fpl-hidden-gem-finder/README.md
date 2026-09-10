@@ -1,15 +1,17 @@
 # FPL Hidden Gem Finder
 
 ## Project Overview
-An exploratory data analysis and prediction dashboard for Fantasy Premier League (FPL).
-The goal is to identify budget-friendly "enabler" players and efficient picks using
-custom metrics (Points Per Million, custom fixture difficulty) and a simple linear
-regression model to predict next-gameweek points.
+A small Streamlit dashboard for finding cheap, high-performing, low-owned
+Fantasy Premier League players. It uses a transparent hand-weighted formula,
+not a trained machine learning model:
 
-## Dataset Source
-[Fantasy Premier League 2025-2026 — Kaggle](https://www.kaggle.com/datasets/calvinrostanto/fantasy-premier-league-2025-2026)
+```text
+Gem Score = 75% normalized points-per-million
+		  + 25% normalized (max ownership - player ownership)
+```
 
-Place the raw CSV in `data/raw/` before running the notebook.
+The dashboard loads current player data from the official FPL API:
+`https://fantasy.premierleague.com/api/bootstrap-static/`.
 
 ## Setup Instructions
 ```bash
@@ -18,8 +20,7 @@ source venv/bin/activate  # on Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Run the notebook first (`notebooks/01_eda_and_feature_engineering.ipynb`) to clean the
-data and save a processed file to `data/processed/`. Then run the dashboard:
+Run the dashboard from the project directory:
 ```bash
 streamlit run app.py
 ```
@@ -28,17 +29,22 @@ streamlit run app.py
 ```
 fpl-hidden-gem-finder/
 ├── data/
-│   ├── raw/              # original Kaggle CSV (not tracked in git)
-│   └── processed/        # cleaned data saved as .parquet
+│   ├── raw/              # optional historical CSV data
+│   └── processed/        # optional notebook outputs
 ├── notebooks/
 │   └── 01_eda_and_feature_engineering.ipynb
 ├── src/
-│   ├── data_cleaning.py       # loading + cleaning functions
-│   ├── feature_engineering.py # rolling form, fixture difficulty, points per million
-│   └── model.py               # time-based split, baseline, linear regression, evaluation
+│   ├── data_cleaning.py       # API loading and position/price cleaning
+│   └── feature_engineering.py # points per million and Gem Score
 ├── app.py                # Streamlit dashboard
 └── requirements.txt
 ```
 
-## Key Findings
-_(fill in after analysis — e.g. model performance vs baseline, most efficient players found, limitations)_
+## Notes
+
+The API price field is stored in tenths of a million (for example, `55` means
+£5.5m). `fetch_fpl_data` converts it to real millions before the dashboard
+calculates scores.
+
+The notebook is retained as historical exploratory work. The deployed app does
+not use its unfinished modeling pipeline; the supported runtime is `app.py`.

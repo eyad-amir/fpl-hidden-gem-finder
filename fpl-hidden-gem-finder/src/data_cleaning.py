@@ -2,35 +2,38 @@
 Data cleaning functions for the FPL Hidden Gem Finder project.
 """
 
+from typing import Final
+
 import pandas as pd
+import requests
 
 
-def load_and_clean_data(filepath: str) -> pd.DataFrame:
-    """
-    Load the raw FPL CSV and return a cleaned DataFrame.
+FPL_API_URL: Final[str] = "https://fantasy.premierleague.com/api/bootstrap-static/"
 
-    Steps this function should perform:
-    - Load the CSV from `filepath`.
-    - Check for and handle duplicate rows (a player can sometimes appear
-      twice for the same gameweek in scraped data — verify this on the
-      actual file before deciding how to drop duplicates).
-    - Handle missing values in minutes-played / points columns deliberately.
-      A player with 0 minutes is a real signal (didn't play), not missing
-      data — don't blindly dropna().
-    - Convert `now_cost` to actual millions if it's stored as an integer
-      (e.g. 55 -> 5.5), matching the raw FPL API convention. Check whether
-      this dataset already did that conversion before applying it again.
-    - Ensure the DataFrame is sorted by player id and gameweek, since later
-      feature engineering (rolling averages) depends on correct ordering.
 
-    Parameters
-    ----------
-    filepath : str
-        Path to the raw CSV file.
+def fetch_fpl_data(url: str = FPL_API_URL) -> pd.DataFrame:
+  """Fetch current player data and readable position names from the FPL API.
 
-    Returns
-    -------
-    pd.DataFrame
-        Cleaned, sorted DataFrame ready for feature engineering.
-    """
-    raise NotImplementedError
+  The API stores player prices in tenths of a million, so ``now_cost`` is
+  converted from values such as ``55`` to ``5.5``.
+  """
+  response = requests.get(url, timeout=30)
+    "total_points",
+    "minutes",
+    "opponent_team",
+  ]
+  for column in numeric_columns:
+    if column in history:
+      history[column] = pd.to_numeric(history[column], errors="coerce")
+
+  if players is not None:
+    metadata_columns = [
+      column
+      for column in ["id", "web_name", "team", "element_type", "position_name"]
+      if column in players.columns
+    ]
+    if "id" in metadata_columns:
+      metadata = players[metadata_columns].rename(columns={"id": "player_id"})
+      history = history.merge(metadata, on="player_id", how="left", validate="many_to_one")
+
+  return history.sort_values(["player_id", "gameweek"]).reset_index(drop=True)

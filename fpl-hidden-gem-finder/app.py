@@ -1,44 +1,83 @@
-"""
-FPL Hidden Gem Finder — Streamlit dashboard entry point.
-"""
+"""Streamlit dashboard for finding low-cost, low-owned FPL players."""
 
+import plotly.express as px
 import streamlit as st
-import pandas as pd
 
-# --- Page config ---
-st.set_page_config(
-    page_title="FPL Hidden Gem Finder",
-    layout="wide",
+from src.data_cleaning import fetch_fpl_data
+from src.feature_engineering import add_gem_score
+
+
+st.set_page_config(page_title="FPL Hidden Gem Finder", layout="wide")
+st.title("FPL Hidden Gem Finder")
+st.caption("A transparent 75% points-per-million and 25% low-ownership score.")
+
+try:
+    players = add_gem_score(fetch_fpl_data())
+except Exception as error:
+    st.error(f"Could not load the FPL API data: {error}")
+    st.stop()
+
+st.header("Filter players")
+max_price = st.slider(
+    "Maximum price (£m)",
+    min_value=float(players["now_cost"].min()),
+    max_value=float(players["now_cost"].max()),
+    value=float(players["now_cost"].max()),
+    step=0.1,
+)
+max_ownership = st.slider(
+    "Maximum ownership (%)",
+    min_value=0.0,
+    max_value=float(players["selected_by_percent"].max()),
+    value=float(players["selected_by_percent"].max()),
+    step=0.1,
+)
+positions = sorted(players["position_name"].dropna().unique())
+selected_positions = st.multiselect("Positions", positions, default=positions)
+
+filtered = players[
+    (players["now_cost"] <= max_price)
+    & (players["selected_by_percent"] <= max_ownership)
+    & (players["position_name"].isin(selected_positions))
+].sort_values("gem_score", ascending=False)
+
+st.subheader(f"Results ({len(filtered)} players)")
+table_columns = [
+    "web_name",
+    "position_name",
+    "now_cost",
+    "total_points",
+    "selected_by_percent",
+    "points_per_million",
+    "gem_score",
+]
+st.dataframe(
+    filtered[table_columns].rename(
+        columns={
+            "web_name": "Player",
+            "position_name": "Position",
+            "now_cost": "Price (£m)",
+            "total_points": "Total points",
+            "selected_by_percent": "Ownership (%)",
+            "points_per_million": "Points / £m",
+            "gem_score": "Gem Score",
+        }
+    ),
+    use_container_width=True,
+    hide_index=True,
 )
 
-st.title("FPL Hidden Gem Finder")
-st.caption("Finding budget-friendly enablers and efficient picks with data.")
-
-
-# --- Data loading ---
-@st.cache_data
-def load_data(path: str) -> pd.DataFrame:
-    """
-    Load the processed (already cleaned + feature-engineered) dataset.
-    Replace this with the actual path to your data/processed/*.parquet file
-    once Phase 1-2 (notebook) are done.
-    """
-    # df = pd.read_parquet(path)
-    # return df
-    raise NotImplementedError
-
-
-# data = load_data("data/processed/fpl_processed.parquet")
-
-
-# --- Sections ---
-st.header("Filter Players")
-# TODO: position filter, price range slider, team filter, min minutes filter
-
-st.header("Points per Million Explorer")
-# TODO: scatter plot (price vs total points, colored by position),
-# with hidden gems = cheap + high points highlighted
-
-st.header("Next Gameweek Predictions")
-# TODO: table of predicted points per player from the trained model,
-# sortable, with a note on model limitations (R²/MAE vs baseline)
+st.subheader("Price versus total points")
+fig = px.scatter(
+    filtered,
+    x="now_cost",
+    y="total_points",
+    color="position_name",
+    hover_name="web_name",
+    labels={
+        "now_cost": "Price (£m)",
+        "total_points": "Total points",
+        "position_name": "Position",
+    },
+)
+st.plotly_chart(fig, use_container_width=True)
