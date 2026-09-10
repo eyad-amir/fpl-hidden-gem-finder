@@ -18,22 +18,25 @@ def fetch_fpl_data(url: str = FPL_API_URL) -> pd.DataFrame:
   converted from values such as ``55`` to ``5.5``.
   """
   response = requests.get(url, timeout=30)
-    "total_points",
-    "minutes",
-    "opponent_team",
-  ]
+  response.raise_for_status()
+  payload = response.json()
+
+  if "elements" not in payload or "element_types" not in payload:
+    raise ValueError("FPL API response is missing elements or element_types.")
+
+  players = pd.DataFrame(payload["elements"])
+  positions = pd.DataFrame(payload["element_types"])[
+    ["id", "singular_name"]
+  ].rename(columns={"id": "element_type", "singular_name": "position_name"})
+  data = players.merge(
+    positions,
+    on="element_type",
+    how="left",
+    validate="many_to_one",
+  )
+  numeric_columns = ["now_cost", "total_points", "minutes", "selected_by_percent"]
   for column in numeric_columns:
-    if column in history:
-      history[column] = pd.to_numeric(history[column], errors="coerce")
-
-  if players is not None:
-    metadata_columns = [
-      column
-      for column in ["id", "web_name", "team", "element_type", "position_name"]
-      if column in players.columns
-    ]
-    if "id" in metadata_columns:
-      metadata = players[metadata_columns].rename(columns={"id": "player_id"})
-      history = history.merge(metadata, on="player_id", how="left", validate="many_to_one")
-
-  return history.sort_values(["player_id", "gameweek"]).reset_index(drop=True)
+    if column in data:
+      data[column] = pd.to_numeric(data[column], errors="coerce")
+  data["now_cost"] = data["now_cost"] / 10
+  return data
